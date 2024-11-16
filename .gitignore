@@ -1,0 +1,32 @@
+# Build folders
+bin/
+obj/
+
+# Environment
+.env
+
+# IDE-specific files
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Logs
+*.log
+
+# Secrets
+ssh
+ssh.pub
+
+# Packages
+packages/
+
+# Generated files
+*.dll
+*.exe
+*.pdb
+*.cache
+
+# Rider IDE-specific files (if applicable)
+.idea/
