@@ -6,21 +6,18 @@ using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add logging configuration
-builder.Logging.ClearProviders(); // Clears default loggers (e.g., Console, Debug)
-builder.Logging.AddConsole(); // Adds console logger
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
 
 // Create the logger instance using the builder's LoggerFactory
 var loggerFactory = LoggerFactory.Create(loggingBuilder =>
 {
-    loggingBuilder.AddConsole(); // Ensure console logging is enabled
+    loggingBuilder.AddConsole();
 });
 var logger = loggerFactory.CreateLogger("Startup");
 
-logger.LogInformation("Loading environment variables from .env file");
 try
 {
-    // Load environment variables from the .env file
     Env.Load();
     logger.LogInformation(".env file loaded successfully");
 }
@@ -35,7 +32,6 @@ logger.LogInformation("Adding services to the container");
 builder.Services.AddControllers();
 logger.LogInformation("Controllers added to the service container");
 
-// Add JWT Authentication
 logger.LogInformation("Setting up JWT authentication");
 try
 {

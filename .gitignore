@@ -1,3 +1,17 @@
+# Terraform files
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# Backup files
+*.backup
+
+# Plan files
+*.tfplan
+
+# Terraform variables files (if containing sensitive information)
+*.tfvars
+
 # Build folders
 bin/
 obj/
