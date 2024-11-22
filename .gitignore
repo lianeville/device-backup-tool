@@ -32,6 +32,7 @@ obj/
 # Secrets
 ssh
 ssh.pub
+.ssh
 
 # Packages
 packages/
