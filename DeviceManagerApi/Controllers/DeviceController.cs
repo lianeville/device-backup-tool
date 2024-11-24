@@ -2,8 +2,10 @@ using DeviceManagerApi.Models;
 using DeviceManagerApi.Helpers;
 
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Logging;
+
 using Renci.SshNet;
 using Renci.SshNet.Common;
 
@@ -16,6 +18,8 @@ using System.Text.Json;
 using System.Net.Http;
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
+using System.Security.Cryptography;
+using System.Linq;
 
 using MongoDB.Bson;
 using MongoDB.Bson.IO;
@@ -23,8 +27,6 @@ using MongoDB.Bson.Serialization;
 
 using ICSharpCode.SharpZipLib.Zip;
 using ICSharpCode.SharpZipLib.GZip;
-using System.Linq;
-using System.Security.Cryptography;
 using Org.BouncyCastle.Crypto;
 using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Modes;
@@ -33,6 +35,7 @@ using Org.BouncyCastle.Crypto.Parameters;
 
 [Route("api/[controller]")]
 [ApiController]
+
 public class DeviceController : ControllerBase
 {
 	private readonly ILogger<DeviceController> _logger;
@@ -153,129 +156,142 @@ public class DeviceController : ControllerBase
 
 	#region Endpoints
 
-	[HttpPost("unifi/backup")]
-	public async Task<IActionResult> GetUniFiBackup()
+	[HttpPost("unifi/backup/start")]
+	[EnableCors("AllowSpecificOrigin")]
+	public async Task<IActionResult> StartUniFiBackup()
 	{
 		try
 		{
-			// Create a custom HttpClientHandler to disable SSL validation
+			var backupId = Guid.NewGuid().ToString();
+			_ = ProcessBackupAsync(backupId);
+			return Ok(new { backupId });
+		}
+		catch (Exception ex)
+		{
+			return BadRequest(new { message = ex.Message });
+		}
+	}
+
+	[HttpGet("unifi/backup/status/{backupId}")]
+	[EnableCors("AllowSpecificOrigin")]
+	public async Task GetBackupStatus(string backupId)
+	{
+		var response = Response;
+		response.Headers.Add("Content-Type", "text/event-stream");
+		response.Headers.Add("Cache-Control", "no-cache");
+		response.Headers.Add("Connection", "keep-alive");
+		Response.Headers.Add("Access-Control-Allow-Origin", "http://localhost:5173");
+		Response.Headers.Add("Access-Control-Allow-Credentials", "true");
+
+		try
+		{
+			async Task SendProgress(string message, string status = "progress")
+			{
+				var progressData = JsonSerializer.Serialize(new { message, status });
+				await response.WriteAsync($"data: {progressData}\n\n");
+				await response.Body.FlushAsync();
+				_logger.LogInformation(message);
+			}
+
+			await SendProgress("Initializing backup process...");
+
 			var handler = new HttpClientHandler
 			{
-				// Disable SSL verification (use cautiously in production)
 				ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true
 			};
 
 			using (var client = new HttpClient(handler))
 			{
-				// Set the base URL for the UniFi API
 				client.BaseAddress = new Uri(_baseUrl);
-
-				// Add headers to accept JSON responses
 				client.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
 
-				// Define the login payload
-				var loginPayload = new
-				{
-					username = _uniFiUsername,
-					password = _uniFiPassword
-				};
+				await SendProgress("Attempting to login to UniFi controller...");
 
-				// Serialize the payload to JSON
+				var loginPayload = new { username = _uniFiUsername, password = _uniFiPassword };
 				var jsonContent = new StringContent(
-						  JsonSerializer.Serialize(loginPayload),
-						  Encoding.UTF8,
-						  "application/json"
+					 JsonSerializer.Serialize(loginPayload),
+					 Encoding.UTF8,
+					 "application/json"
 				);
 
-				// Send the POST request to login
 				var loginResponse = await client.PostAsync("/api/auth/login", jsonContent);
 
 				if (!loginResponse.IsSuccessStatusCode)
 				{
 					var errorContent = await loginResponse.Content.ReadAsStringAsync();
-					_logger.LogError($"Login failed: {errorContent}");
-					return StatusCode((int)loginResponse.StatusCode, "Failed to log in to UniFi controller.");
+					await SendProgress($"Login failed: {errorContent}", "error");
+					return;
 				}
 
-				// Extract the token from the login response
+				await SendProgress("Successfully logged in to UniFi controller");
+
 				var responseContent = await loginResponse.Content.ReadAsStringAsync();
 				var loginJson = JsonSerializer.Deserialize<JsonElement>(responseContent);
 
 				if (!loginJson.TryGetProperty("deviceToken", out var tokenProperty))
 				{
-					_logger.LogError("Failed to extract device token from login response.");
-					return StatusCode(500, "Failed to extract device token from login response.");
+					await SendProgress("Failed to extract device token", "error");
+					return;
 				}
 
 				string deviceToken = tokenProperty.GetString();
-				_logger.LogInformation($"Received device token: {deviceToken}");
+				await SendProgress("Successfully obtained device token");
 
-				// Set the Authorization header with the token
 				client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", deviceToken);
 
-				// Extract cookies from the login response headers
 				string cookies = string.Join("; ", loginResponse.Headers.GetValues("Set-Cookie"));
-
-				// Attempt to extract the x-csrf-token from cookies
 				string csrfToken = ExtractCsrfTokenFromCookies(cookies);
 
 				if (!string.IsNullOrEmpty(csrfToken))
 				{
-					_logger.LogInformation($"Extracted CSRF token: {csrfToken}");
-					// Add the x-csrf-token header
 					client.DefaultRequestHeaders.Add("x-csrf-token", csrfToken);
+					await SendProgress("Successfully extracted and set CSRF token");
 				}
 
-				// Define the payload for the backup request
-				var backupPayload = new
-				{
-					cmd = "backup",
-					days = -1 // Include all days in the backup
-				};
+				await SendProgress("Initiating backup process...");
 
-				// Serialize the backup payload
-				var backupJsonContent = new StringContent(
-						  JsonSerializer.Serialize(backupPayload),
-						  Encoding.UTF8,
-						  "application/json"
-				);
+				// var backupPayload = new { cmd = "backup", days = -1 };
+				// var backupJsonContent = new StringContent(
+				// 	  JsonSerializer.Serialize(backupPayload),
+				// 	  Encoding.UTF8,
+				// 	  "application/json"
+				// );
 
-				// Send the POST request to initiate the backup
-				var backupResponse = await client.PostAsync("/proxy/network/api/s/default/cmd/backup", backupJsonContent);
+				// var backupResponse = await client.PostAsync("/proxy/network/api/s/default/cmd/backup", backupJsonContent);
 
-				if (!backupResponse.IsSuccessStatusCode)
-				{
-					var backupErrorContent = await backupResponse.Content.ReadAsStringAsync();
-					_logger.LogError($"Backup request failed: {backupErrorContent}");
-					return StatusCode((int)backupResponse.StatusCode, "Failed to initiate backup.");
-				}
+				// if (!backupResponse.IsSuccessStatusCode)
+				// {
+				// 	var backupErrorContent = await backupResponse.Content.ReadAsStringAsync();
+				// 	await SendProgress($"Backup request failed: {backupErrorContent}", "error");
+				// 	return;
+				// }
 
-				// Process the successful backup response
-				var backupResponseContent = await backupResponse.Content.ReadAsStringAsync();
-				_logger.LogInformation("Backup initiated successfully.");
 
-				// Now, initiate the SSH file download
-				string remoteBackupFilePath = "/data/unifi/data/backup/8.6.9.unf"; // Adjust to actual backup file path on the device
+				await SendProgress("Backup created successfully, downloading file...");
+
+				string remoteBackupFilePath = "/data/unifi/data/backup/8.6.9.unf";
 				var fileStream = GetBackupFileStream(remoteBackupFilePath);
 
 				if (fileStream == null)
 				{
-					return StatusCode(500, "Failed to download backup file.");
+					await SendProgress("Failed to download backup file", "error");
+					return;
 				}
 
-				_logger.LogInformation($"Backup file size: {fileStream.Length} bytes.");
+				await SendProgress($"Downloaded backup file ({fileStream.Length} bytes)");
+				await SendProgress("Decrypting backup file...");
 
 				try
 				{
 					var decryptedStream = DecryptBackup(fileStream);
-					_logger.LogInformation("Backup file decrypted successfully.");
+					await SendProgress("Backup file decrypted successfully");
 
-					// Create a temporary memory stream to store the decrypted data
 					var tempMemoryStream = new MemoryStream();
 					await decryptedStream.CopyToAsync(tempMemoryStream);
 					tempMemoryStream.Position = 0;
 
-					// Use SharpZipLib to read the ZIP file
+					await SendProgress("Processing backup archive...");
+
 					using (var zipInputStream = new ZipInputStream(tempMemoryStream))
 					{
 						ZipEntry entry;
@@ -283,9 +299,8 @@ public class DeviceController : ControllerBase
 						{
 							if (entry.Name.Equals("db.gz", StringComparison.OrdinalIgnoreCase))
 							{
-								_logger.LogInformation($"Found db.gz file in archive. Size: {entry.Size} bytes");
+								await SendProgress($"Found db.gz file (Size: {entry.Size} bytes)");
 
-								// Create a memory stream to store the db.gz content
 								var gzippedStream = new MemoryStream();
 								byte[] buffer = new byte[4096];
 								int count;
@@ -295,9 +310,8 @@ public class DeviceController : ControllerBase
 								}
 
 								gzippedStream.Position = 0;
-								_logger.LogInformation("Successfully extracted db.gz from backup archive");
+								await SendProgress("Decompressing database...");
 
-								// Now decompress the GZip content
 								using (var gzipInputStream = new GZipInputStream(gzippedStream))
 								{
 									var decompressedStream = new MemoryStream();
@@ -308,38 +322,43 @@ public class DeviceController : ControllerBase
 									}
 
 									decompressedStream.Position = 0;
-									_logger.LogInformation($"Successfully decompressed db.gz. Final size: {decompressedStream.Length} bytes");
+									await SendProgress($"Database decompressed successfully ({decompressedStream.Length} bytes)");
+
+									await SendProgress("Converting BSON to JSON...");
 
 									var jsonResult = BsonConverter.ConvertBsonStreamToJson(decompressedStream);
-									return Ok(jsonResult);
+
+									var finalResult = JsonSerializer.Serialize(new
+									{
+										status = "complete",
+										data = jsonResult
+									});
+									await response.WriteAsync($"data: {finalResult}\n\n");
+									return;
 								}
 							}
 						}
 
-						_logger.LogError("db.gz file not found in the backup archive");
-						return NotFound("db.gz file not found in the backup");
+						await SendProgress("db.gz file not found in the backup archive", "error");
 					}
 				}
-				catch (ICSharpCode.SharpZipLib.SharpZipBaseException ex)
+				catch (Exception ex)
 				{
-					_logger.LogError($"Failed to process ZIP archive using SharpZipLib: {ex.Message}");
-					return StatusCode(500, "Failed to process backup archive");
-				}
-				catch (CryptographicException ex)
-				{
-					_logger.LogError($"Failed to decrypt backup file: {ex.Message}");
-					return StatusCode(500, "Failed to decrypt backup file");
+					await SendProgress($"Error processing backup: {ex.Message}", "error");
 				}
 			}
 		}
 		catch (Exception ex)
 		{
-			// Log and handle unexpected errors
-			_logger.LogError($"Error fetching UniFi devices: {ex.Message}");
-			return StatusCode(500, "Failed to fetch UniFi devices.");
+			await response.WriteAsync($"data: {JsonSerializer.Serialize(new { message = $"Error: {ex.Message}", status = "error" })}\n\n");
 		}
 	}
 
+	private async Task ProcessBackupAsync(string backupId)
+	{
+		// This method can be used to store backup state if needed
+		await Task.CompletedTask;
+	}
 	private bool FileExistsOnRemote(SshClient sshClient, string remoteFilePath)
 	{
 		try
@@ -440,10 +459,13 @@ public class DeviceController : ControllerBase
 
 
 	[HttpGet("script/status")]
-	[Authorize]
+	[EnableCors("AllowSpecificOrigin")]
 	public IActionResult GetScriptStatus()
 	{
 		_logger.LogInformation("Fetching script status from device");
+
+		Response.Headers.Add("Access-Control-Allow-Origin", "http://localhost:5173");
+		Response.Headers.Add("Access-Control-Allow-Credentials", "true");
 
 		try
 		{

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Cors;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
@@ -8,6 +9,7 @@ using Microsoft.Extensions.Configuration;
 namespace DeviceManagerApi.Controllers
 {
 	[Route("api/[controller]")]
+	[EnableCors("AllowSpecificOrigin")]
 	[ApiController]
 	public class AuthController : ControllerBase
 	{

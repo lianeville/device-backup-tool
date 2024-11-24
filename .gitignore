@@ -36,6 +36,8 @@ ssh.pub
 
 # Packages
 packages/
+package-lock.json
+node_modules/
 
 # Generated files
 *.dll

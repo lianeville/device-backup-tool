@@ -1,0 +1,8 @@
+{
+	"devDependencies": {
+		"concurrently": "^9.1.0"
+	},
+	"scripts": {
+		"start": "concurrently \"cd DeviceManagerApi/ && dotnet watch run\" \"cd Frontend/ && npm run dev\""
+	}
+}
