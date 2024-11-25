@@ -21,9 +21,6 @@ using System.Security.Cryptography.X509Certificates;
 using System.Security.Cryptography;
 using System.Linq;
 
-using MongoDB.Bson;
-using MongoDB.Bson.IO;
-using MongoDB.Bson.Serialization;
 
 using ICSharpCode.SharpZipLib.Zip;
 using ICSharpCode.SharpZipLib.GZip;
@@ -104,54 +101,77 @@ public class DeviceController : ControllerBase
 		}
 	}
 
-	public class BsonConverter
+	public static List<Dictionary<string, string>> GetAlerts(string inputString, List<string> searchTerms, List<(string, string)> alertFields, int maxAlerts)
 	{
-		public static JsonDocument ConvertBsonStreamToJson(MemoryStream decompressedStream)
+		var results = new List<Dictionary<string, string>>();
+
+		// Create a copy of the input string to modify
+		string remainingString = inputString;
+
+		for (int alertCount = 0; alertCount < maxAlerts; alertCount++)
 		{
-			var documents = new List<BsonDocument>();
+			// Create a list to store the current alert's fields
+			var currentAlert = new Dictionary<string, string>();
+			bool alertFound = true;
+			int lastFoundIndex = 0;
 
-			// Read all BSON documents from the stream
-			using (var reader = new BsonBinaryReader(decompressedStream))
+			// Search for each term in the sequence
+			foreach (var (firstSearch, secondSearch) in alertFields)
 			{
-				try
+				// Construct full search strings
+				string firstSearchFull = $"{{ \"__cmd\" : \"select\", \"collection\" : \"{firstSearch}\" }}";
+				string secondSearchFull = $"\"{secondSearch}\"";
+
+				// Find the first search term
+				int firstIndex = remainingString.IndexOf(firstSearchFull, lastFoundIndex);
+				if (firstIndex == -1)
 				{
-					while (decompressedStream.Position < decompressedStream.Length)
-					{
-						var document = BsonSerializer.Deserialize<BsonDocument>(reader);
-						documents.Add(document);
-					}
+					alertFound = false;
+					break;
 				}
-				catch (EndOfStreamException)
+
+				// Find the second search term
+				int secondIndex = remainingString.IndexOf(secondSearchFull, firstIndex + firstSearchFull.Length);
+				if (secondIndex == -1)
 				{
-					// Expected when we reach the end of the stream
+					alertFound = false;
+					break;
 				}
+
+				// Find the next set of double quotes after the second search term
+				int startQuote = remainingString.IndexOf("\"", secondIndex + secondSearchFull.Length);
+				int endQuote = remainingString.IndexOf("\"", startQuote + 1);
+
+				if (startQuote == -1 || endQuote == -1)
+				{
+					alertFound = false;
+					break;
+				}
+
+				// Extract the value and add to the current alert
+				string extractedString = remainingString.Substring(startQuote + 1, endQuote - startQuote - 1);
+				currentAlert[secondSearch] = extractedString;
+
+				// Update the last found index to continue searching
+				lastFoundIndex = endQuote;
 			}
 
-			// Create a root object to hold all documents
-			var rootObject = new Dictionary<string, object>();
-
-			// Group documents by their collection (_type field if present)
-			var groupedDocuments = documents
-				 .GroupBy(doc => doc.Contains("_type") ?
-									doc["_type"].AsString :
-									"unclassified");
-
-			// Add each group to the root object
-			foreach (var group in groupedDocuments)
+			// If a complete alert was found, add it to results
+			if (alertFound)
 			{
-				var collectionName = group.Key;
-				var documentList = group.Select(doc => doc.ToJson()).ToList();
-				rootObject[collectionName] = documentList;
+				results.Add(currentAlert);
+
+				// Update the remaining string to search from the last found index
+				remainingString = remainingString.Substring(lastFoundIndex);
 			}
-
-			// Convert to JSON
-			var jsonString = JsonSerializer.Serialize(rootObject, new JsonSerializerOptions
+			else
 			{
-				WriteIndented = true
-			});
-
-			return JsonDocument.Parse(jsonString);
+				// If no more alerts can be found, break the loop
+				break;
+			}
 		}
+
+		return results;
 	}
 
 	#region Endpoints
@@ -172,9 +192,11 @@ public class DeviceController : ControllerBase
 		}
 	}
 
-	[HttpGet("unifi/backup/status/{backupId}")]
+	// [HttpGet("unifi/backup/status/{backupId}")]
+	[HttpGet("unifi/backup/status/{backupId}/{regenerate}")]
 	[EnableCors("AllowSpecificOrigin")]
-	public async Task GetBackupStatus(string backupId)
+	// public async Task GetBackupStatus(string backupId)
+	public async Task GetBackupStatus(string backupId, string regenerate)
 	{
 		var response = Response;
 		response.Headers.Add("Content-Type", "text/event-stream");
@@ -182,6 +204,12 @@ public class DeviceController : ControllerBase
 		response.Headers.Add("Connection", "keep-alive");
 		Response.Headers.Add("Access-Control-Allow-Origin", "http://localhost:5173");
 		Response.Headers.Add("Access-Control-Allow-Credentials", "true");
+
+		bool shouldRegenerateBackup;
+		if (!bool.TryParse(regenerate, out shouldRegenerateBackup))
+		{
+			_logger.LogError("Invalid regenerate value");
+		}
 
 		try
 		{
@@ -209,9 +237,9 @@ public class DeviceController : ControllerBase
 
 				var loginPayload = new { username = _uniFiUsername, password = _uniFiPassword };
 				var jsonContent = new StringContent(
-					 JsonSerializer.Serialize(loginPayload),
-					 Encoding.UTF8,
-					 "application/json"
+					JsonSerializer.Serialize(loginPayload),
+					Encoding.UTF8,
+					"application/json"
 				);
 
 				var loginResponse = await client.PostAsync("/api/auth/login", jsonContent);
@@ -248,26 +276,33 @@ public class DeviceController : ControllerBase
 					await SendProgress("Successfully extracted and set CSRF token");
 				}
 
-				await SendProgress("Initiating backup process...");
+				if (shouldRegenerateBackup)
+				{
+					await SendProgress("Initiating backup process...");
 
-				// var backupPayload = new { cmd = "backup", days = -1 };
-				// var backupJsonContent = new StringContent(
-				// 	  JsonSerializer.Serialize(backupPayload),
-				// 	  Encoding.UTF8,
-				// 	  "application/json"
-				// );
+					var backupPayload = new { cmd = "backup", days = -1 };
+					var backupJsonContent = new StringContent(
+						  JsonSerializer.Serialize(backupPayload),
+						  Encoding.UTF8,
+						  "application/json"
+					);
 
-				// var backupResponse = await client.PostAsync("/proxy/network/api/s/default/cmd/backup", backupJsonContent);
+					var backupResponse = await client.PostAsync("/proxy/network/api/s/default/cmd/backup", backupJsonContent);
 
-				// if (!backupResponse.IsSuccessStatusCode)
-				// {
-				// 	var backupErrorContent = await backupResponse.Content.ReadAsStringAsync();
-				// 	await SendProgress($"Backup request failed: {backupErrorContent}", "error");
-				// 	return;
-				// }
+					if (!backupResponse.IsSuccessStatusCode)
+					{
+						var backupErrorContent = await backupResponse.Content.ReadAsStringAsync();
+						await SendProgress($"Backup request failed: {backupErrorContent}", "error");
+						return;
+					}
 
+					await SendProgress("Backup created successfully, downloading file...");
+				}
+				else
+				{
+					await SendProgress("Retrieving latest backup...");
+				}
 
-				await SendProgress("Backup created successfully, downloading file...");
 
 				string remoteBackupFilePath = "/data/unifi/data/backup/8.6.9.unf";
 				var fileStream = GetBackupFileStream(remoteBackupFilePath);
@@ -299,7 +334,7 @@ public class DeviceController : ControllerBase
 						{
 							if (entry.Name.Equals("db.gz", StringComparison.OrdinalIgnoreCase))
 							{
-								await SendProgress($"Found db.gz file (Size: {entry.Size} bytes)");
+								await SendProgress($"Found db.gz file");
 
 								var gzippedStream = new MemoryStream();
 								byte[] buffer = new byte[4096];
@@ -326,12 +361,37 @@ public class DeviceController : ControllerBase
 
 									await SendProgress("Converting BSON to JSON...");
 
-									var jsonResult = BsonConverter.ConvertBsonStreamToJson(decompressedStream);
+									string sourceText = DeviceControllerHelpers.ConvertBsonStreamToString(decompressedStream);
+
+									// var alertFields = new List<(string, string)>
+									// 	{
+									// 		("ISP_COLLECTION", "key"),
+									// 		("TIME_COLLECTION", "time")
+									// 	};
+
+
+									// List<(string, string)> searchPairs = new List<(string, string)>
+									// {
+									// 		("setting", "hostname"),
+									// 		("alert", "key")
+									// };
+
+									// GetAlerts
+
+									// var results = DeviceControllerHelpers.SearchString(sourceText, searchPairs);
+
+									var results = new
+									{
+										Hostname = DeviceControllerHelpers.GetHostname(sourceText),
+										Alerts = DeviceControllerHelpers.GetAlerts(sourceText),
+										date = DateTime.Now
+									};
 
 									var finalResult = JsonSerializer.Serialize(new
 									{
+										message = "Backup file retrieved",
 										status = "complete",
-										data = jsonResult
+										data = results,
 									});
 									await response.WriteAsync($"data: {finalResult}\n\n");
 									return;

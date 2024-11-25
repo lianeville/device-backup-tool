@@ -18,5 +18,9 @@ namespace DeviceManagerApi.Models
 		public string Version { get; set; } = string.Empty;
 		public DateTime LastSeen { get; set; }
 	}
+	// public class Backup
+	// {
+
+	// }
 
 }

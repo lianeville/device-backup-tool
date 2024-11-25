@@ -5,12 +5,10 @@ const DeviceList = () => {
 	const [devices, setDevices] = useState([
 		{
 			id: 1,
-			name: "Production Server",
-			ip: "192.168.1.101",
+			name: "Unifi Controller",
+			ip: "192.168.1.1",
 			status: "Online",
 		},
-		{ id: 2, name: "Database Server", ip: "192.168.1.102", status: "Online" },
-		{ id: 3, name: "Dev Environment", ip: "192.168.1.103", status: "Online" },
 	])
 
 	const [expandedDevices, setExpandedDevices] = useState({})
@@ -43,10 +41,10 @@ const DeviceList = () => {
 	const startBackup = async deviceId => {
 		try {
 			// Initialize backup logs for this device if they don't exist
-			setBackupLogs(prev => ({
-				...prev,
-				[deviceId]: prev[deviceId] || [],
-			}))
+			// setBackupLogs(prev => ({
+			// 	...prev,
+			// 	[deviceId]: prev[deviceId] || [],
+			// }))
 
 			// Set backup as active
 			setActiveBackups(prev => ({
@@ -54,7 +52,7 @@ const DeviceList = () => {
 				[deviceId]: true,
 			}))
 
-			addLog("Initiating backup process...", "progress", deviceId)
+			// addLog("Initiating backup process...", "progress", deviceId)
 
 			// First, initiate the backup process
 			const response = await fetch(
@@ -73,11 +71,14 @@ const DeviceList = () => {
 			}
 
 			const { backupId } = await response.json()
-			addLog("Backup process started successfully", "progress", deviceId)
+			// addLog("Backup process started successfully", "progress", deviceId)
+
+			const regenerate = "false"
 
 			// Then create EventSource to monitor progress
 			const eventSource = new EventSource(
-				`http://localhost:5299/api/device/unifi/backup/status/${backupId}`,
+				// `http://localhost:5299/api/device/unifi/backup/status/${backupId}`,
+				`http://localhost:5299/api/device/unifi/backup/status/${backupId}/${regenerate}`,
 				{
 					withCredentials: true,
 				}
@@ -100,11 +101,11 @@ const DeviceList = () => {
 						}))
 
 						if (data.status === "complete" && data.data) {
-							addLog(
-								"Backup completed successfully",
-								"complete",
-								deviceId
-							)
+							// addLog(
+							// 	"Backup completed successfully",
+							// 	"complete",
+							// 	deviceId
+							// )
 							console.log("Backup completed with data:", data.data)
 						}
 					}
@@ -309,7 +310,7 @@ const DeviceList = () => {
 						{expandedDevices[device.id] && (
 							<div className="border-t p-4 bg-gray-50">
 								<h4 className="font-medium mb-2">Backup Events</h4>
-								<div className="space-y-2">
+								<div className="space-y-2 max-h-52 overflow-y-scroll">
 									{backupLogs[device.id]?.map((log, index) => (
 										<div
 											key={index}
