@@ -1,4 +1,4 @@
-import React, { useState } from "react"
+import React, { useState, useRef, useEffect } from "react"
 import { ChevronDown, ChevronUp, HardDrive, Clock } from "lucide-react"
 
 const DeviceList = () => {
@@ -38,21 +38,19 @@ const DeviceList = () => {
 		}))
 	}
 
+	useEffect(() => {
+		if (backupLogRef.current) {
+			backupLogRef.current.scrollTop = backupLogRef.current.scrollHeight
+		}
+	}, [logs, backupLogs])
+
 	const startBackup = async deviceId => {
 		try {
-			// Initialize backup logs for this device if they don't exist
-			// setBackupLogs(prev => ({
-			// 	...prev,
-			// 	[deviceId]: prev[deviceId] || [],
-			// }))
-
 			// Set backup as active
 			setActiveBackups(prev => ({
 				...prev,
 				[deviceId]: true,
 			}))
-
-			// addLog("Initiating backup process...", "progress", deviceId)
 
 			// First, initiate the backup process
 			const response = await fetch(
@@ -101,11 +99,6 @@ const DeviceList = () => {
 						}))
 
 						if (data.status === "complete" && data.data) {
-							// addLog(
-							// 	"Backup completed successfully",
-							// 	"complete",
-							// 	deviceId
-							// )
 							console.log("Backup completed with data:", data.data)
 						}
 					}
@@ -252,6 +245,8 @@ const DeviceList = () => {
 		)
 	}
 
+	const backupLogRef = useRef(null)
+
 	return (
 		<div className="w-full mx-auto p-6 space-y-4">
 			<h1 className="text-2xl font-bold mb-6">Device Backup Dashboard</h1>
@@ -310,7 +305,10 @@ const DeviceList = () => {
 						{expandedDevices[device.id] && (
 							<div className="border-t p-4 bg-gray-50">
 								<h4 className="font-medium mb-2">Backup Events</h4>
-								<div className="space-y-2 max-h-52 overflow-y-scroll">
+								<div
+									ref={backupLogRef}
+									className="space-y-2 max-h-52 overflow-y-scroll"
+								>
 									{backupLogs[device.id]?.map((log, index) => (
 										<div
 											key={index}

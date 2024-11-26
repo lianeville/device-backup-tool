@@ -11,10 +11,41 @@ using MongoDB.Bson;
 using MongoDB.Bson.IO;
 using MongoDB.Bson.Serialization;
 
+using ICSharpCode.SharpZipLib.Zip;
+using ICSharpCode.SharpZipLib.GZip;
+using Org.BouncyCastle.Crypto;
+using Org.BouncyCastle.Crypto.Engines;
+using Org.BouncyCastle.Crypto.Modes;
+using Org.BouncyCastle.Crypto.Parameters;
+
+using DeviceManagerApi.Models;
+using DeviceManagerApi.Helpers;
+
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Cors;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.Extensions.Logging;
+
+using Renci.SshNet;
+using Renci.SshNet.Common;
+
+using System;
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Text;
+using System.Text.Json;
+using System.Net.Http;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+using System.Security.Cryptography;
+using System.Linq;
+
+
 
 namespace DeviceManagerApi.Helpers
 {
-	public static class DeviceControllerHelpers
+	public static class ControllerHelpers
 	{
 		// Static logger field, so you don't need to pass it to every method
 		private static ILogger? _logger;
@@ -198,6 +229,157 @@ namespace DeviceManagerApi.Helpers
 			}
 
 			return num;
+		}
+
+		public static async Task ProcessBackupAsync(string backupId)
+		{
+			// This method can be used to store backup state if needed
+			await Task.CompletedTask;
+		}
+		private static bool FileExistsOnRemote(SshClient sshClient, string remoteFilePath)
+		{
+			try
+			{
+				// Run a shell command to check if the file exists
+				var command = sshClient.RunCommand($"test -e {remoteFilePath} && echo 'exists' || echo 'not exists'");
+
+				// If the result is 'exists', return true, otherwise false
+				return command.Result.Trim() == "exists";
+			}
+			catch (Exception ex)
+			{
+				_logger.LogError($"Error checking if file exists on remote: {ex.Message}");
+				return false;
+			}
+		}
+
+		public static Stream GetBackupFileStream(string remoteFilePath, Renci.SshNet.ConnectionInfo ConnectionInfo)
+		{
+			try
+			{
+				using (var sshClient = new SshClient(ConnectionInfo))
+				{
+					sshClient.Connect();
+
+					// Check if the backup file exists on the remote device using SshClient
+					if (!FileExistsOnRemote(sshClient, remoteFilePath))
+					{
+						_logger.LogError($"Backup file does not exist at {remoteFilePath}.");
+						return null;
+					}
+
+					// Use ScpClient to download the file content to a memory stream instead of a file
+					using (var scpClient = new ScpClient(ConnectionInfo))
+					{
+						scpClient.Connect();
+						var memoryStream = new MemoryStream();
+						scpClient.Download(remoteFilePath, memoryStream);
+
+						_logger.LogInformation($"Backup file fetched from {remoteFilePath}. Returning to the client.");
+						sshClient.Disconnect();
+
+						// Set the memory stream position to the beginning before returning
+						memoryStream.Position = 0;
+						return memoryStream;
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				_logger.LogError($"Error downloading backup file: {ex.Message}");
+				return null;
+			}
+		}
+
+		public static string ExtractCsrfTokenFromCookies(string cookies)
+		{
+			// Check if the cookies contain "TOKEN"
+			if (!string.IsNullOrEmpty(cookies) && cookies.Contains("TOKEN"))
+			{
+				// Split the cookies to find the TOKEN value
+				var cookieParts = cookies.Split(';');
+				string token = cookieParts.FirstOrDefault(part => part.Contains("TOKEN"))?.Split('=')[1];
+
+				if (!string.IsNullOrEmpty(token))
+				{
+					// Split the JWT into its components
+					var jwtComponents = token.Split('.');
+					if (jwtComponents.Length > 1)
+					{
+						// Decode the payload (second part of the JWT)
+						var payloadJson = Base64UrlDecode(jwtComponents[1]);
+
+						// Parse the payload JSON to extract the csrfToken
+						var payload = JsonSerializer.Deserialize<JsonElement>(payloadJson);
+						if (payload.TryGetProperty("csrfToken", out var csrfToken))
+						{
+							return csrfToken.GetString();
+						}
+					}
+				}
+			}
+
+			return null; // Return null if no CSRF token is found
+		}
+
+		// Helper method to decode Base64Url (used in JWTs)
+		private static string Base64UrlDecode(string input)
+		{
+			string base64 = input.Replace('-', '+').Replace('_', '/');
+			switch (input.Length % 4)
+			{
+				case 2: base64 += "=="; break;
+				case 3: base64 += "="; break;
+			}
+			return Encoding.UTF8.GetString(Convert.FromBase64String(base64));
+		}
+
+
+		public static Stream DecryptBackup(Stream encryptedStream)
+		{
+			try
+			{
+				// Convert hex key and IV to byte arrays
+				byte[] key = HexStringToByteArray("626379616e676b6d6c756f686d617273");
+				byte[] iv = HexStringToByteArray("75626e74656e74657270726973656170");
+
+				// Create AES cipher
+				var cipher = new CbcBlockCipher(new AesEngine());
+				var parameters = new ParametersWithIV(new KeyParameter(key), iv);
+				cipher.Init(false, parameters); // false for decryption
+
+				// Read encrypted data
+				byte[] encryptedData = new byte[encryptedStream.Length];
+				encryptedStream.Read(encryptedData, 0, encryptedData.Length);
+
+				// Process the encryption block by block
+				byte[] decryptedData = new byte[encryptedData.Length];
+				int pos = 0;
+				int blockSize = cipher.GetBlockSize();
+
+				while (pos < encryptedData.Length)
+				{
+					cipher.ProcessBlock(encryptedData, pos, decryptedData, pos);
+					pos += blockSize;
+				}
+
+				// Create memory stream with decrypted data
+				var decryptedStream = new MemoryStream(decryptedData);
+				decryptedStream.Position = 0;
+				return decryptedStream;
+			}
+			catch (Exception ex)
+			{
+				throw new CryptographicException("Failed to decrypt backup file", ex);
+			}
+		}
+
+		private static byte[] HexStringToByteArray(string hex)
+		{
+			return Enumerable.Range(0, hex.Length)
+								 .Where(x => x % 2 == 0)
+								 .Select(x => Convert.ToByte(hex.Substring(x, 2), 16))
+								 .ToArray();
 		}
 
 		public static string GetInitialShellOutput(ShellStream shellStream)

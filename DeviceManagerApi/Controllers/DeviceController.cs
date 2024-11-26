@@ -9,6 +9,9 @@ using Microsoft.Extensions.Logging;
 using Renci.SshNet;
 using Renci.SshNet.Common;
 
+using ICSharpCode.SharpZipLib.Zip;
+using ICSharpCode.SharpZipLib.GZip;
+
 using System;
 using System;
 using System.IO;
@@ -20,15 +23,6 @@ using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Cryptography;
 using System.Linq;
-
-
-using ICSharpCode.SharpZipLib.Zip;
-using ICSharpCode.SharpZipLib.GZip;
-using Org.BouncyCastle.Crypto;
-using Org.BouncyCastle.Crypto.Engines;
-using Org.BouncyCastle.Crypto.Modes;
-using Org.BouncyCastle.Crypto.Parameters;
-
 
 [Route("api/[controller]")]
 [ApiController]
@@ -49,129 +43,8 @@ public class DeviceController : ControllerBase
 	public DeviceController(ILogger<DeviceController> logger)
 	{
 		_logger = logger ?? throw new ArgumentNullException(nameof(logger));
-		DeviceControllerHelpers.SetLogger(logger);
+		ControllerHelpers.SetLogger(logger);
 
-	}
-
-	private static byte[] HexStringToByteArray(string hex)
-	{
-		return Enumerable.Range(0, hex.Length)
-							 .Where(x => x % 2 == 0)
-							 .Select(x => Convert.ToByte(hex.Substring(x, 2), 16))
-							 .ToArray();
-	}
-
-
-	public static Stream DecryptBackup(Stream encryptedStream)
-	{
-		try
-		{
-			// Convert hex key and IV to byte arrays
-			byte[] key = HexStringToByteArray("626379616e676b6d6c756f686d617273");
-			byte[] iv = HexStringToByteArray("75626e74656e74657270726973656170");
-
-			// Create AES cipher
-			var cipher = new CbcBlockCipher(new AesEngine());
-			var parameters = new ParametersWithIV(new KeyParameter(key), iv);
-			cipher.Init(false, parameters); // false for decryption
-
-			// Read encrypted data
-			byte[] encryptedData = new byte[encryptedStream.Length];
-			encryptedStream.Read(encryptedData, 0, encryptedData.Length);
-
-			// Process the encryption block by block
-			byte[] decryptedData = new byte[encryptedData.Length];
-			int pos = 0;
-			int blockSize = cipher.GetBlockSize();
-
-			while (pos < encryptedData.Length)
-			{
-				cipher.ProcessBlock(encryptedData, pos, decryptedData, pos);
-				pos += blockSize;
-			}
-
-			// Create memory stream with decrypted data
-			var decryptedStream = new MemoryStream(decryptedData);
-			decryptedStream.Position = 0;
-			return decryptedStream;
-		}
-		catch (Exception ex)
-		{
-			throw new CryptographicException("Failed to decrypt backup file", ex);
-		}
-	}
-
-	public static List<Dictionary<string, string>> GetAlerts(string inputString, List<string> searchTerms, List<(string, string)> alertFields, int maxAlerts)
-	{
-		var results = new List<Dictionary<string, string>>();
-
-		// Create a copy of the input string to modify
-		string remainingString = inputString;
-
-		for (int alertCount = 0; alertCount < maxAlerts; alertCount++)
-		{
-			// Create a list to store the current alert's fields
-			var currentAlert = new Dictionary<string, string>();
-			bool alertFound = true;
-			int lastFoundIndex = 0;
-
-			// Search for each term in the sequence
-			foreach (var (firstSearch, secondSearch) in alertFields)
-			{
-				// Construct full search strings
-				string firstSearchFull = $"{{ \"__cmd\" : \"select\", \"collection\" : \"{firstSearch}\" }}";
-				string secondSearchFull = $"\"{secondSearch}\"";
-
-				// Find the first search term
-				int firstIndex = remainingString.IndexOf(firstSearchFull, lastFoundIndex);
-				if (firstIndex == -1)
-				{
-					alertFound = false;
-					break;
-				}
-
-				// Find the second search term
-				int secondIndex = remainingString.IndexOf(secondSearchFull, firstIndex + firstSearchFull.Length);
-				if (secondIndex == -1)
-				{
-					alertFound = false;
-					break;
-				}
-
-				// Find the next set of double quotes after the second search term
-				int startQuote = remainingString.IndexOf("\"", secondIndex + secondSearchFull.Length);
-				int endQuote = remainingString.IndexOf("\"", startQuote + 1);
-
-				if (startQuote == -1 || endQuote == -1)
-				{
-					alertFound = false;
-					break;
-				}
-
-				// Extract the value and add to the current alert
-				string extractedString = remainingString.Substring(startQuote + 1, endQuote - startQuote - 1);
-				currentAlert[secondSearch] = extractedString;
-
-				// Update the last found index to continue searching
-				lastFoundIndex = endQuote;
-			}
-
-			// If a complete alert was found, add it to results
-			if (alertFound)
-			{
-				results.Add(currentAlert);
-
-				// Update the remaining string to search from the last found index
-				remainingString = remainingString.Substring(lastFoundIndex);
-			}
-			else
-			{
-				// If no more alerts can be found, break the loop
-				break;
-			}
-		}
-
-		return results;
 	}
 
 	#region Endpoints
@@ -183,7 +56,7 @@ public class DeviceController : ControllerBase
 		try
 		{
 			var backupId = Guid.NewGuid().ToString();
-			_ = ProcessBackupAsync(backupId);
+			_ = ControllerHelpers.ProcessBackupAsync(backupId);
 			return Ok(new { backupId });
 		}
 		catch (Exception ex)
@@ -192,10 +65,8 @@ public class DeviceController : ControllerBase
 		}
 	}
 
-	// [HttpGet("unifi/backup/status/{backupId}")]
 	[HttpGet("unifi/backup/status/{backupId}/{regenerate}")]
 	[EnableCors("AllowSpecificOrigin")]
-	// public async Task GetBackupStatus(string backupId)
 	public async Task GetBackupStatus(string backupId, string regenerate)
 	{
 		var response = Response;
@@ -268,7 +139,7 @@ public class DeviceController : ControllerBase
 				client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", deviceToken);
 
 				string cookies = string.Join("; ", loginResponse.Headers.GetValues("Set-Cookie"));
-				string csrfToken = ExtractCsrfTokenFromCookies(cookies);
+				string csrfToken = ControllerHelpers.ExtractCsrfTokenFromCookies(cookies);
 
 				if (!string.IsNullOrEmpty(csrfToken))
 				{
@@ -305,7 +176,7 @@ public class DeviceController : ControllerBase
 
 
 				string remoteBackupFilePath = "/data/unifi/data/backup/8.6.9.unf";
-				var fileStream = GetBackupFileStream(remoteBackupFilePath);
+				var fileStream = ControllerHelpers.GetBackupFileStream(remoteBackupFilePath, GetSshConnectionInfo());
 
 				if (fileStream == null)
 				{
@@ -318,7 +189,7 @@ public class DeviceController : ControllerBase
 
 				try
 				{
-					var decryptedStream = DecryptBackup(fileStream);
+					var decryptedStream = ControllerHelpers.DecryptBackup(fileStream);
 					await SendProgress("Backup file decrypted successfully");
 
 					var tempMemoryStream = new MemoryStream();
@@ -361,29 +232,12 @@ public class DeviceController : ControllerBase
 
 									await SendProgress("Converting BSON to JSON...");
 
-									string sourceText = DeviceControllerHelpers.ConvertBsonStreamToString(decompressedStream);
-
-									// var alertFields = new List<(string, string)>
-									// 	{
-									// 		("ISP_COLLECTION", "key"),
-									// 		("TIME_COLLECTION", "time")
-									// 	};
-
-
-									// List<(string, string)> searchPairs = new List<(string, string)>
-									// {
-									// 		("setting", "hostname"),
-									// 		("alert", "key")
-									// };
-
-									// GetAlerts
-
-									// var results = DeviceControllerHelpers.SearchString(sourceText, searchPairs);
+									string sourceText = ControllerHelpers.ConvertBsonStreamToString(decompressedStream);
 
 									var results = new
 									{
-										Hostname = DeviceControllerHelpers.GetHostname(sourceText),
-										Alerts = DeviceControllerHelpers.GetAlerts(sourceText),
+										Hostname = ControllerHelpers.GetHostname(sourceText),
+										Alerts = ControllerHelpers.GetAlerts(sourceText),
 										date = DateTime.Now
 									};
 
@@ -413,110 +267,6 @@ public class DeviceController : ControllerBase
 			await response.WriteAsync($"data: {JsonSerializer.Serialize(new { message = $"Error: {ex.Message}", status = "error" })}\n\n");
 		}
 	}
-
-	private async Task ProcessBackupAsync(string backupId)
-	{
-		// This method can be used to store backup state if needed
-		await Task.CompletedTask;
-	}
-	private bool FileExistsOnRemote(SshClient sshClient, string remoteFilePath)
-	{
-		try
-		{
-			// Run a shell command to check if the file exists
-			var command = sshClient.RunCommand($"test -e {remoteFilePath} && echo 'exists' || echo 'not exists'");
-
-			// If the result is 'exists', return true, otherwise false
-			return command.Result.Trim() == "exists";
-		}
-		catch (Exception ex)
-		{
-			_logger.LogError($"Error checking if file exists on remote: {ex.Message}");
-			return false;
-		}
-	}
-
-	private Stream GetBackupFileStream(string remoteFilePath)
-	{
-		try
-		{
-			using (var sshClient = new SshClient(GetSshConnectionInfo()))
-			{
-				sshClient.Connect();
-
-				// Check if the backup file exists on the remote device using SshClient
-				if (!FileExistsOnRemote(sshClient, remoteFilePath))
-				{
-					_logger.LogError($"Backup file does not exist at {remoteFilePath}.");
-					return null;
-				}
-
-				// Use ScpClient to download the file content to a memory stream instead of a file
-				using (var scpClient = new ScpClient(GetSshConnectionInfo()))
-				{
-					scpClient.Connect();
-					var memoryStream = new MemoryStream();
-					scpClient.Download(remoteFilePath, memoryStream);
-
-					_logger.LogInformation($"Backup file fetched from {remoteFilePath}. Returning to the client.");
-					sshClient.Disconnect();
-
-					// Set the memory stream position to the beginning before returning
-					memoryStream.Position = 0;
-					return memoryStream;
-				}
-			}
-		}
-		catch (Exception ex)
-		{
-			_logger.LogError($"Error downloading backup file: {ex.Message}");
-			return null;
-		}
-	}
-
-	private string ExtractCsrfTokenFromCookies(string cookies)
-	{
-		// Check if the cookies contain "TOKEN"
-		if (!string.IsNullOrEmpty(cookies) && cookies.Contains("TOKEN"))
-		{
-			// Split the cookies to find the TOKEN value
-			var cookieParts = cookies.Split(';');
-			string token = cookieParts.FirstOrDefault(part => part.Contains("TOKEN"))?.Split('=')[1];
-
-			if (!string.IsNullOrEmpty(token))
-			{
-				// Split the JWT into its components
-				var jwtComponents = token.Split('.');
-				if (jwtComponents.Length > 1)
-				{
-					// Decode the payload (second part of the JWT)
-					var payloadJson = Base64UrlDecode(jwtComponents[1]);
-
-					// Parse the payload JSON to extract the csrfToken
-					var payload = JsonSerializer.Deserialize<JsonElement>(payloadJson);
-					if (payload.TryGetProperty("csrfToken", out var csrfToken))
-					{
-						return csrfToken.GetString();
-					}
-				}
-			}
-		}
-
-		return null; // Return null if no CSRF token is found
-	}
-
-	// Helper method to decode Base64Url (used in JWTs)
-	private string Base64UrlDecode(string input)
-	{
-		string base64 = input.Replace('-', '+').Replace('_', '/');
-		switch (input.Length % 4)
-		{
-			case 2: base64 += "=="; break;
-			case 3: base64 += "="; break;
-		}
-		return Encoding.UTF8.GetString(Convert.FromBase64String(base64));
-	}
-
 
 	[HttpGet("script/status")]
 	[EnableCors("AllowSpecificOrigin")]
@@ -570,7 +320,7 @@ public class DeviceController : ControllerBase
 				_logger.LogInformation("Connected to device");
 
 				var shellStream = client.CreateShellStream("xterm", 10000, 24, 800, 600, 1024);
-				string initialOutput = DeviceControllerHelpers.GetInitialShellOutput(shellStream);
+				string initialOutput = ControllerHelpers.GetInitialShellOutput(shellStream);
 				_logger.LogInformation("Initial shell output (discarded):\n" + initialOutput);
 
 				var commands = new List<(string Command, int ExpectedLines)>
@@ -578,12 +328,12 @@ public class DeviceController : ControllerBase
 						("systemctl status unifibackup.service", 19)
 					};
 
-				string fullOutput = DeviceControllerHelpers.GetCommandOutput(shellStream, commands);
+				string fullOutput = ControllerHelpers.GetCommandOutput(shellStream, commands);
 				_logger.LogInformation("Full output from shell commands:\n" + fullOutput);
 
 				client.Disconnect();
 
-				return DeviceControllerHelpers.ParseScriptStatus(fullOutput);
+				return ControllerHelpers.ParseScriptStatus(fullOutput);
 			}
 			catch (Exception ex)
 			{
