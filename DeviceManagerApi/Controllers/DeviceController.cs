@@ -242,11 +242,14 @@ public class DeviceController : ControllerBase
 
 									string sourceText = ControllerHelpers.ConvertBsonStreamToString(decompressedStream);
 
+									var (alerts, remainingAlerts) = ControllerHelpers.GetAlerts(sourceText);
 									var results = new
 									{
 										Hostname = ControllerHelpers.GetHostname(sourceText),
-										Alerts = ControllerHelpers.GetAlerts(sourceText),
-										date = DateTime.Now
+										Alerts = alerts,
+										RemainingAlerts = remainingAlerts,
+										date = DateTime.Now,
+										source = sourceText
 									};
 
 									var finalResult = JsonSerializer.Serialize(new

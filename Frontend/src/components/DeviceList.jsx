@@ -1,5 +1,8 @@
 import React, { useState, useRef, useEffect } from "react"
 import { ChevronDown, ChevronUp, HardDrive, Clock } from "lucide-react"
+import dateFormat, { masks } from "dateformat"
+import EventLogItem from "./EventLogItem"
+import BackupLogItem from "./BackupLogItem"
 
 const DeviceList = () => {
 	const [devices, setDevices] = useState([
@@ -12,37 +15,30 @@ const DeviceList = () => {
 	])
 
 	const [expandedDevices, setExpandedDevices] = useState({})
-	const [backupLogs, setBackupLogs] = useState({})
 	const [activeBackups, setActiveBackups] = useState({})
 	const [scriptStatuses, setScriptStatuses] = useState({})
 	const [authToken, setAuthToken] = useState(null) // To store the JWT token
 	const [logs, setLogs] = useState([])
 
-	const addLog = (message, status, deviceId) => {
-		const timestamp = new Date().toISOString()
+	const addLog = (message, status) => {
+		let time = dateFormat("h:MM:ss TT")
 
-		// Update the general logs
-		setLogs(prev => [...prev, { message, status, timestamp }])
+		setLogs(prev => [...prev, { message, status, time }])
+	}
 
-		// Update device-specific backup logs
-		setBackupLogs(prev => ({
-			...prev,
-			[deviceId]: [
-				...(prev[deviceId] || []),
-				{
-					message,
-					status,
-					time: new Date().toLocaleTimeString(),
-				},
-			],
-		}))
+	const addBackupLog = log => {
+		log.time = dateFormat("h:MM:ss TT")
+		log.isBackup = true
+
+		console.log(log)
+		setLogs(prev => [...prev, log])
 	}
 
 	useEffect(() => {
 		if (backupLogRef.current) {
 			backupLogRef.current.scrollTop = backupLogRef.current.scrollHeight
 		}
-	}, [logs, backupLogs])
+	}, [logs])
 
 	const startBackup = async deviceId => {
 		try {
@@ -69,13 +65,8 @@ const DeviceList = () => {
 			}
 
 			const { backupId } = await response.json()
-			// addLog("Backup process started successfully", "progress", deviceId)
-
 			const regenerate = "false"
-
-			// Then create EventSource to monitor progress
 			const eventSource = new EventSource(
-				// `http://localhost:5299/api/device/unifi/backup/status/${backupId}`,
 				`http://localhost:5299/api/device/unifi/backup/status/${backupId}/${regenerate}`,
 				{
 					withCredentials: true,
@@ -93,10 +84,7 @@ const DeviceList = () => {
 
 					if (data.status === "complete" || data.status === "error") {
 						eventSource.close()
-						setActiveBackups(prev => ({
-							...prev,
-							[deviceId]: false,
-						}))
+						addBackupLog(data.data)
 
 						if (data.status === "complete" && data.data) {
 							console.log("Backup completed with data:", data.data)
@@ -138,9 +126,7 @@ const DeviceList = () => {
 			[deviceId]: !prev[deviceId],
 		}))
 
-		if (!backupLogs[deviceId]) {
-			startBackup(deviceId)
-		}
+		startBackup(deviceId)
 	}
 
 	const getScriptStatus = async deviceId => {
@@ -224,27 +210,6 @@ const DeviceList = () => {
 		}
 	}
 
-	const StatusIndicator = ({ status }) => {
-		const getStatusColor = status => {
-			switch (status.toLowerCase()) {
-				case "error":
-					return "bg-red-500"
-				case "complete":
-					return "bg-green-500"
-				default:
-					return "bg-blue-500"
-			}
-		}
-
-		return (
-			<span
-				className={`inline-block w-2 h-2 rounded-full mr-2 ${getStatusColor(
-					status
-				)}`}
-			/>
-		)
-	}
-
 	const backupLogRef = useRef(null)
 
 	return (
@@ -302,34 +267,20 @@ const DeviceList = () => {
 							</div>
 						</div>
 
-						{expandedDevices[device.id] && (
+						{logs.length > 0 && (
 							<div className="border-t p-4 bg-gray-50">
 								<h4 className="font-medium mb-2">Backup Events</h4>
 								<div
 									ref={backupLogRef}
 									className="space-y-2 max-h-52 overflow-y-scroll"
 								>
-									{backupLogs[device.id]?.map((log, index) => (
-										<div
-											key={index}
-											className="flex items-center space-x-2 text-sm"
-										>
-											<Clock size={14} className="text-gray-400" />
-											<span className="text-gray-500">
-												{log.time}
-											</span>
-											<StatusIndicator status={log.status} />
-											<span
-												className={
-													log.status === "error"
-														? "text-red-600"
-														: ""
-												}
-											>
-												{log.message}
-											</span>
-										</div>
-									))}
+									{logs.map((log, index) =>
+										log.isBackup ? (
+											<BackupLogItem log={log} key={index} />
+										) : (
+											<EventLogItem log={log} key={index} />
+										)
+									)}
 								</div>
 							</div>
 						)}

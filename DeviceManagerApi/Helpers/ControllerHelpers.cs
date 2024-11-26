@@ -77,7 +77,7 @@ namespace DeviceManagerApi.Helpers
 			return "Could not find hostname.";
 		}
 
-		public static List<Dictionary<string, string>> GetAlerts(string inputString)
+		public static (List<Dictionary<string, string>> alerts, int remainingAlerts) GetAlerts(string inputString)
 		{
 			var alerts = new List<Dictionary<string, string>>();
 			string collectionSearch = $"{{ \"__cmd\" : \"select\", \"collection\" : \"alert\" }}";
@@ -86,10 +86,13 @@ namespace DeviceManagerApi.Helpers
 			if (currentSearchIndex == -1)
 			{
 				_logger.LogError("Could not find alert collection.");
-				return alerts;
+				return (alerts, 0);
 			}
 
 			int maxAlerts = 3;
+			int remainingAlertsCount = 0;
+
+			// First, extract up to maxAlerts
 			while (alerts.Count < maxAlerts)
 			{
 				// Search for 'key'
@@ -120,13 +123,33 @@ namespace DeviceManagerApi.Helpers
 
 				// Add to alerts list
 				alerts.Add(new Dictionary<string, string>
-		  	{
+		  {
 				{ "key", key },
 				{ "time", time }
-		  	});
+		  });
 
 				// Update search index for next iteration
 				currentSearchIndex = timeEndQuote;
+			}
+
+			// Find the next command index
+			int nextCommandIndex = inputString.IndexOf("\"__cmd\"", currentSearchIndex);
+
+			// Count remaining alerts from current index to next command
+			while (true)
+			{
+				// Search for 'key'
+				string keySearch = "\"key\"";
+				int keyIndex = inputString.IndexOf(keySearch, currentSearchIndex);
+
+				// Stop if key is not found or is after next command
+				if (keyIndex == -1 || (nextCommandIndex != -1 && keyIndex > nextCommandIndex)) break;
+
+				remainingAlertsCount++;
+
+				// Find key end to update search index
+				int keyEndQuote = inputString.IndexOf("\"", inputString.IndexOf("\"", keyIndex + keySearch.Length) + 1);
+				currentSearchIndex = keyEndQuote;
 			}
 
 			if (alerts.Count == 0)
@@ -134,9 +157,8 @@ namespace DeviceManagerApi.Helpers
 				_logger.LogWarning("No alerts found.");
 			}
 
-			return alerts;
+			return (alerts, remainingAlertsCount);
 		}
-
 		public static List<string> SearchString(string inputString, List<(string, string)> searches)
 		{
 			var results = new List<string>();
