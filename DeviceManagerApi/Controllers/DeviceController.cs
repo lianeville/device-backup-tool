@@ -36,14 +36,17 @@ public class DeviceController : ControllerBase
 	private readonly string _baseUrl = "https://" + Environment.GetEnvironmentVariable("DEVICE_IP");
 	private readonly string _privateKeyPath = "./.ssh/id_rsa";
 	private readonly string? _privateKeyPassphrase = null;
-	private readonly string _uniFiUsername = "admin"; // Your UniFi admin username
-	private readonly string _uniFiPassword = "jhoABNdjwV3Gvu4i"; // Your UniFi admin password
+	private readonly string _uniFiUsername = Environment.GetEnvironmentVariable("UNIFI_USERNAME");
+	private readonly string _uniFiPassword = Environment.GetEnvironmentVariable("UNIFI_PASSWORD");
 
 
 	public DeviceController(ILogger<DeviceController> logger)
 	{
 		_logger = logger ?? throw new ArgumentNullException(nameof(logger));
 		ControllerHelpers.SetLogger(logger);
+
+		_logger.LogInformation(_uniFiUsername);
+		_logger.LogInformation(_uniFiPassword);
 
 	}
 
@@ -70,11 +73,11 @@ public class DeviceController : ControllerBase
 	public async Task GetBackupStatus(string backupId, string regenerate)
 	{
 		var response = Response;
-		response.Headers.Add("Content-Type", "text/event-stream");
-		response.Headers.Add("Cache-Control", "no-cache");
-		response.Headers.Add("Connection", "keep-alive");
-		Response.Headers.Add("Access-Control-Allow-Origin", "http://localhost:5173");
-		Response.Headers.Add("Access-Control-Allow-Credentials", "true");
+		response.Headers["Content-Type"] = "text/event-stream";
+		response.Headers["Cache-Control"] = "no-cache";
+		response.Headers["Connection"] = "keep-alive";
+		response.Headers["Access-Control-Allow-Origin"] = "http://localhost:5173";
+		response.Headers["Access-Control-Allow-Credentials"] = "true";
 
 		bool shouldRegenerateBackup;
 		if (!bool.TryParse(regenerate, out shouldRegenerateBackup))
@@ -133,7 +136,12 @@ public class DeviceController : ControllerBase
 					return;
 				}
 
-				string deviceToken = tokenProperty.GetString();
+				string? deviceToken = tokenProperty.GetString();
+				if (string.IsNullOrEmpty(deviceToken))
+				{
+					SendProgress("Could not obtain device token", "error");
+					return;
+				}
 				await SendProgress("Successfully obtained device token");
 
 				client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", deviceToken);
@@ -274,8 +282,8 @@ public class DeviceController : ControllerBase
 	{
 		_logger.LogInformation("Fetching script status from device");
 
-		Response.Headers.Add("Access-Control-Allow-Origin", "http://localhost:5173");
-		Response.Headers.Add("Access-Control-Allow-Credentials", "true");
+		Response.Headers["Access-Control-Allow-Origin"] = "http://localhost:5173";
+		Response.Headers["Access-Control-Allow-Credentials"] = "true";
 
 		try
 		{

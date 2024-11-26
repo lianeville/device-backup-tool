@@ -1,11 +1,6 @@
 using DeviceManagerApi.Models;  // Add the using directive to reference ScriptStatus
 using Renci.SshNet;
 using Renci.SshNet.Common;
-using System;
-using System.Collections.Generic;
-using System.Text;
-using System.Text.RegularExpressions;
-using Microsoft.Extensions.Logging;
 
 using MongoDB.Bson;
 using MongoDB.Bson.IO;
@@ -18,23 +13,16 @@ using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Modes;
 using Org.BouncyCastle.Crypto.Parameters;
 
-using DeviceManagerApi.Models;
-using DeviceManagerApi.Helpers;
-
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Logging;
 
-using Renci.SshNet;
-using Renci.SshNet.Common;
-
-using System;
-using System;
 using System.IO;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Net.Http;
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
@@ -350,7 +338,17 @@ namespace DeviceManagerApi.Helpers
 
 				// Read encrypted data
 				byte[] encryptedData = new byte[encryptedStream.Length];
-				encryptedStream.Read(encryptedData, 0, encryptedData.Length);
+				int totalBytesRead = 0;
+
+				while (totalBytesRead < encryptedData.Length)
+				{
+					int bytesRead = encryptedStream.Read(encryptedData, totalBytesRead, encryptedData.Length - totalBytesRead);
+					if (bytesRead == 0)
+					{
+						throw new EndOfStreamException("Unable to read the entire stream.");
+					}
+					totalBytesRead += bytesRead;
+				}
 
 				// Process the encryption block by block
 				byte[] decryptedData = new byte[encryptedData.Length];
