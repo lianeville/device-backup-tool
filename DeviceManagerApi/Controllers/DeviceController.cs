@@ -13,7 +13,6 @@ using ICSharpCode.SharpZipLib.Zip;
 using ICSharpCode.SharpZipLib.GZip;
 
 using System;
-using System;
 using System.IO;
 using System.Collections.Generic;
 using System.Text;
@@ -26,36 +25,27 @@ using System.Linq;
 
 [Route("api/[controller]")]
 [ApiController]
-
 public class DeviceController : ControllerBase
 {
 	private readonly ILogger<DeviceController> _logger;
-	private readonly string _host = Environment.GetEnvironmentVariable("DEVICE_IP");
 	private readonly int _port = 22;
 	private readonly string _username = "root";
-	private readonly string _baseUrl = "https://" + Environment.GetEnvironmentVariable("DEVICE_IP");
 	private readonly string _privateKeyPath = "./.ssh/id_rsa";
 	private readonly string? _privateKeyPassphrase = null;
-	private readonly string _uniFiUsername = Environment.GetEnvironmentVariable("UNIFI_USERNAME");
-	private readonly string _uniFiPassword = Environment.GetEnvironmentVariable("UNIFI_PASSWORD");
-
 
 	public DeviceController(ILogger<DeviceController> logger)
 	{
 		_logger = logger ?? throw new ArgumentNullException(nameof(logger));
 		ControllerHelpers.SetLogger(logger);
-
-		_logger.LogInformation(_uniFiUsername);
-		_logger.LogInformation(_uniFiPassword);
-
 	}
 
 	#region Endpoints
 
 	[HttpPost("unifi/backup/start")]
 	[EnableCors("AllowSpecificOrigin")]
-	public async Task<IActionResult> StartUniFiBackup()
+	public async Task<IActionResult> StartUniFiBackup([FromBody] UniFiCredentials credentials)
 	{
+		_logger.LogInformation(credentials.Ip);
 		try
 		{
 			var backupId = Guid.NewGuid().ToString();
@@ -70,7 +60,7 @@ public class DeviceController : ControllerBase
 
 	[HttpGet("unifi/backup/status/{backupId}/{regenerate}")]
 	[EnableCors("AllowSpecificOrigin")]
-	public async Task GetBackupStatus(string backupId, string regenerate)
+	public async Task GetBackupStatus(string backupId, string regenerate, [FromQuery] UniFiCredentials credentials)
 	{
 		var response = Response;
 		response.Headers["Content-Type"] = "text/event-stream";
@@ -104,14 +94,11 @@ public class DeviceController : ControllerBase
 
 			using (var client = new HttpClient(handler))
 			{
-				client.BaseAddress = new Uri(_baseUrl);
+				client.BaseAddress = new Uri(credentials.BaseUrl);
 				client.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
 
-				// [Login process remains the same as in the original code]
-				// ... [Previous login code]
-
 				string remoteBackupFilePath = "/data/unifi/data/backup/8.6.9.unf";
-				var fileStream = ControllerHelpers.GetBackupFileStream(remoteBackupFilePath, GetSshConnectionInfo());
+				var fileStream = ControllerHelpers.GetBackupFileStream(remoteBackupFilePath, GetSshConnectionInfo(credentials));
 
 				if (fileStream == null)
 				{
@@ -225,7 +212,7 @@ public class DeviceController : ControllerBase
 
 	[HttpGet("script/status")]
 	[EnableCors("AllowSpecificOrigin")]
-	public IActionResult GetScriptStatus()
+	public IActionResult GetScriptStatus([FromQuery] UniFiCredentials credentials)
 	{
 		_logger.LogInformation("Fetching script status from device");
 
@@ -234,13 +221,14 @@ public class DeviceController : ControllerBase
 
 		try
 		{
-			var scriptStatus = GetScriptStatusFromDevice();
+			var scriptStatus = GetScriptStatusFromDevice(credentials);
 			return Ok(new
 			{
 				scriptStatus.Status,
 				scriptStatus.DateChanged,
 				scriptStatus.Memory,
-				scriptStatus.Tasks
+				scriptStatus.Tasks,
+				Username = credentials.Username
 			});
 		}
 		catch (Exception ex)
@@ -253,24 +241,28 @@ public class DeviceController : ControllerBase
 	#endregion
 	#region Device
 
-	private Renci.SshNet.ConnectionInfo GetSshConnectionInfo()
+	private Renci.SshNet.ConnectionInfo GetSshConnectionInfo(UniFiCredentials credentials)
 	{
-		var privateKeyFile = new PrivateKeyFile(_privateKeyPath, _privateKeyPassphrase);
-		var keyFiles = new[] { privateKeyFile };
+		string ip = credentials.Ip;
+		{
+			var privateKeyFile = new PrivateKeyFile(_privateKeyPath, _privateKeyPassphrase);
+			var keyFiles = new[] { privateKeyFile };
 
-		_logger.LogInformation($"Preparing SSH connection to {_host} on port {_port} with username {_username}");
+			_logger.LogInformation($"Preparing SSH connection to {ip} on port {_port} with username {_username}");
 
-		return new Renci.SshNet.ConnectionInfo(_host, _port, _username,
-			 new PrivateKeyAuthenticationMethod(_username, keyFiles));
+			return new Renci.SshNet.ConnectionInfo(ip, _port, _username,
+				 new PrivateKeyAuthenticationMethod(_username, keyFiles));
+		}
+
 	}
 
-	private ScriptStatus GetScriptStatusFromDevice()
+	private ScriptStatus GetScriptStatusFromDevice(UniFiCredentials credentials)
 	{
-		using (var client = new SshClient(GetSshConnectionInfo()))
+		using (var client = new SshClient(GetSshConnectionInfo(credentials)))
 		{
 			try
 			{
-				_logger.LogInformation($"Attempting to connect to {_host} with username {_username}");
+				_logger.LogInformation($"Attempting to connect to {credentials.Ip} with username {_username}");
 				client.Connect();
 				_logger.LogInformation("Connected to device");
 
@@ -279,9 +271,9 @@ public class DeviceController : ControllerBase
 				_logger.LogInformation("Initial shell output (discarded):\n" + initialOutput);
 
 				var commands = new List<(string Command, int ExpectedLines)>
-					{
-						("systemctl status unifibackup.service", 19)
-					};
+						{
+							("systemctl status unifibackup.service", 19)
+						};
 
 				string fullOutput = ControllerHelpers.GetCommandOutput(shellStream, commands);
 				_logger.LogInformation("Full output from shell commands:\n" + fullOutput);

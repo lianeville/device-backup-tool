@@ -3,46 +3,63 @@ import { ChevronDown, ChevronUp, HardDrive } from "lucide-react"
 import dateFormat from "dateformat"
 import EventLogItem from "./EventLogItem"
 import BackupLogItem from "./BackupLogItem"
+import useDeviceStore from "../stores/DeviceStore"
 
 const DeviceList = () => {
-	const [devices, setDevices] = useState([
-		{
-			id: 1,
-			name: "Unifi Controller",
-			ip: "192.168.1.1",
-			status: "Online",
-		},
-	])
+	const { devices } = useDeviceStore()
 
 	const [expandedDevices, setExpandedDevices] = useState({})
 	const [activeBackups, setActiveBackups] = useState({})
 	const [scriptStatuses, setScriptStatuses] = useState({})
-	const [authToken, setAuthToken] = useState(null) // To store the JWT token
-	const [logs, setLogs] = useState([])
+	const [authToken, setAuthToken] = useState(null)
+	const [deviceLogs, setDeviceLogs] = useState({})
 	const [isGenerating, setIsGenerating] = useState(false)
 
-	const addLog = (message, status) => {
+	// Reference to the device logs container
+	const deviceLogsRefs = useRef({})
+
+	const addLog = (deviceId, message, status) => {
 		let time = dateFormat("h:MM:ss TT")
 
-		setLogs(prev => [...prev, { message, status, time }])
+		setDeviceLogs(prev => {
+			const newLogs = {
+				...prev,
+				[deviceId]: [...(prev[deviceId] || []), { message, status, time }],
+			}
+			return newLogs
+		})
 	}
 
-	const addBackupLog = log => {
+	const addBackupLog = (deviceId, log) => {
 		log.date = dateFormat("mmm dd, yyyy HH:MM")
 		log.isBackup = true
 
-		setLogs(prev => [...prev, log])
+		setDeviceLogs(prev => {
+			const newLogs = {
+				...prev,
+				[deviceId]: [...(prev[deviceId] || []), log],
+			}
+			return newLogs
+		})
 	}
 
 	useEffect(() => {
-		if (backupLogRef.current) {
-			backupLogRef.current.scrollTop = backupLogRef.current.scrollHeight
-		}
-	}, [logs])
+		Object.keys(deviceLogs).forEach(deviceId => {
+			const logsContainer = deviceLogsRefs.current[deviceId]
+			if (logsContainer) {
+				logsContainer.scrollTop = logsContainer.scrollHeight
+			}
+		})
+	}, [deviceLogs])
 
 	const startBackup = async deviceId => {
+		const device = devices.find(d => d.id === deviceId)
+		if (!device) {
+			addLog(deviceId, "Device not found", "error")
+			return
+		}
+
 		try {
-			// Set backup as active
 			setIsGenerating(true)
 
 			setActiveBackups(prev => ({
@@ -50,43 +67,52 @@ const DeviceList = () => {
 				[deviceId]: true,
 			}))
 
-			// First, initiate the backup process
-			const response = await fetch(
-				"http://localhost:5299/api/device/unifi/backup/start",
+			// Modify the URL to include credentials as query parameters
+			const startBackupResponse = await fetch(
+				`http://localhost:5299/api/device/unifi/backup/start?Username=${device.username}&Password=${device.password}&BaseUrl=${device.baseUrl}&Ip=${device.ip}`,
 				{
 					method: "POST",
 					credentials: "include",
 					headers: {
+						"Content-Type": "application/json",
 						Authorization: `Bearer ${authToken}`,
 					},
+					body: JSON.stringify({
+						Username: device.username,
+						Password: device.password,
+						baseUrl: device.baseUrl,
+						Ip: device.ip,
+					}),
 				}
 			)
 
-			if (!response.ok) {
-				throw new Error(`HTTP error! status: ${response.status}`)
+			if (!startBackupResponse.ok) {
+				throw new Error(`HTTP error! status: ${startBackupResponse.status}`)
 			}
 
-			const { backupId } = await response.json()
-			const regenerate = "false"
+			const { backupId } = await startBackupResponse.json()
+			const regenerate = "true"
+
+			// Modify EventSource URL to include credentials as query parameters
 			const eventSource = new EventSource(
-				`http://localhost:5299/api/device/unifi/backup/status/${backupId}/${regenerate}`,
+				`http://localhost:5299/api/device/unifi/backup/status/${backupId}/${regenerate}?Username=${device.username}&Password=${device.password}&BaseUrl=${device.baseUrl}&Ip=${device.ip}`,
 				{
 					withCredentials: true,
 				}
 			)
 
 			eventSource.onopen = () => {
-				addLog("Connection established", "progress", deviceId)
+				addLog(deviceId, "Connection established", "progress")
 			}
 
 			eventSource.onmessage = event => {
 				try {
 					const data = JSON.parse(event.data)
-					addLog(data.message, data.status, deviceId)
+					addLog(deviceId, data.message, data.status)
 
 					if (data.status === "complete" || data.status === "error") {
 						eventSource.close()
-						addBackupLog(data.data)
+						addBackupLog(deviceId, data.data)
 						setIsGenerating(false)
 
 						if (data.status === "complete" && data.data) {
@@ -95,13 +121,13 @@ const DeviceList = () => {
 					}
 				} catch (error) {
 					console.error("Error parsing SSE data:", error)
-					addLog("Error processing server message", "error", deviceId)
+					addLog(deviceId, "Error processing server message", "error")
 				}
 			}
 
 			eventSource.onerror = error => {
 				console.error("EventSource failed:", error)
-				addLog("Connection error occurred", "error", deviceId)
+				addLog(deviceId, "Connection error occurred", "error")
 				eventSource.close()
 				setIsGenerating(false)
 				setActiveBackups(prev => ({
@@ -116,11 +142,12 @@ const DeviceList = () => {
 				}
 			}
 		} catch (error) {
-			addLog(`Failed to start backup: ${error.message}`, "error", deviceId)
+			addLog(deviceId, `Failed to start backup: ${error.message}`, "error")
 			setActiveBackups(prev => ({
 				...prev,
 				[deviceId]: false,
 			}))
+			setIsGenerating(false)
 		}
 	}
 
@@ -133,14 +160,17 @@ const DeviceList = () => {
 		startBackup(deviceId)
 	}
 
-	const getScriptStatus = async deviceId => {
-		addLog("Getting backup script status...", "progress")
+	const getScriptStatus = async device => {
+		addLog(device.id, "Getting backup script status...", "progress")
+		const deviceId = device.id
 		try {
+			// Modify the URL to include credentials as query parameters
 			const response = await fetch(
-				"http://localhost:5299/api/device/script/status",
+				`http://localhost:5299/api/device/script/status?Username=${device.username}&Password=${device.password}&BaseUrl=${device.baseUrl}&Ip=${device.ip}`,
 				{
 					headers: {
-						Authorization: `Bearer ${authToken}`, // Include token in header
+						Authorization: `Bearer ${authToken}`,
+						"Content-Type": "application/json",
 					},
 					credentials: "include",
 				}
@@ -161,7 +191,7 @@ const DeviceList = () => {
 			}
 			message += dateFormat(data.dateChanged, "mmm dd, yyyy HH:MM")
 
-			addLog(message, status)
+			addLog(deviceId, message, status)
 		} catch (error) {
 			setScriptStatuses(prev => ({
 				...prev,
@@ -169,8 +199,6 @@ const DeviceList = () => {
 			}))
 		}
 	}
-
-	const backupLogRef = useRef(null)
 
 	return (
 		<div className="w-full mx-auto p-6 space-y-4">
@@ -208,7 +236,7 @@ const DeviceList = () => {
 									</button>
 
 									<button
-										onClick={() => getScriptStatus(device.id)}
+										onClick={() => getScriptStatus(device)}
 										className="flex items-center space-x-2 px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors"
 									>
 										<span>Get Script Status</span>
@@ -217,23 +245,26 @@ const DeviceList = () => {
 							</div>
 						</div>
 
-						{logs.length > 0 && (
-							<div className="border-t p-4 bg-gray-50">
-								<h4 className="font-medium mb-2">Backup Events</h4>
-								<div
-									ref={backupLogRef}
-									className="space-y-2 max-h-[325px] overflow-y-scroll px-2"
-								>
-									{logs.map((log, index) =>
-										log.isBackup ? (
-											<BackupLogItem log={log} key={index} />
-										) : (
-											<EventLogItem log={log} key={index} />
-										)
-									)}
+						{deviceLogs[device.id] &&
+							deviceLogs[device.id].length > 0 && (
+								<div className="border-t p-4 bg-gray-50">
+									<h4 className="font-medium mb-2">Backup Events</h4>
+									<div
+										ref={el =>
+											(deviceLogsRefs.current[device.id] = el)
+										}
+										className="space-y-2 max-h-[325px] overflow-y-scroll px-2"
+									>
+										{deviceLogs[device.id].map((log, index) =>
+											log.isBackup ? (
+												<BackupLogItem log={log} key={index} />
+											) : (
+												<EventLogItem log={log} key={index} />
+											)
+										)}
+									</div>
 								</div>
-							</div>
-						)}
+							)}
 					</div>
 				))}
 			</div>

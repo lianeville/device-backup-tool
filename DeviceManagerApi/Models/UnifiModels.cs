@@ -18,9 +18,13 @@ namespace DeviceManagerApi.Models
 		public string Version { get; set; } = string.Empty;
 		public DateTime LastSeen { get; set; }
 	}
-	// public class Backup
-	// {
+	public class UniFiCredentials
+	{
+		public string Username { get; set; }
 
-	// }
+		public string Password { get; set; }
 
+		public string BaseUrl { get; set; }
+		public string Ip { get; set; }
+	}
 }
