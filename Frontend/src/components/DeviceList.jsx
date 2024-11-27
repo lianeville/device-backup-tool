@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react"
-import { ChevronDown, ChevronUp, HardDrive, Clock } from "lucide-react"
-import dateFormat, { masks } from "dateformat"
+import { ChevronDown, ChevronUp, HardDrive } from "lucide-react"
+import dateFormat from "dateformat"
 import EventLogItem from "./EventLogItem"
 import BackupLogItem from "./BackupLogItem"
 
@@ -19,6 +19,7 @@ const DeviceList = () => {
 	const [scriptStatuses, setScriptStatuses] = useState({})
 	const [authToken, setAuthToken] = useState(null) // To store the JWT token
 	const [logs, setLogs] = useState([])
+	const [isGenerating, setIsGenerating] = useState(false)
 
 	const addLog = (message, status) => {
 		let time = dateFormat("h:MM:ss TT")
@@ -27,7 +28,7 @@ const DeviceList = () => {
 	}
 
 	const addBackupLog = log => {
-		log.time = dateFormat("h:MM:ss TT")
+		log.date = dateFormat("mmm dd, yyyy HH:MM")
 		log.isBackup = true
 
 		console.log(log)
@@ -43,6 +44,8 @@ const DeviceList = () => {
 	const startBackup = async deviceId => {
 		try {
 			// Set backup as active
+			setIsGenerating(true)
+
 			setActiveBackups(prev => ({
 				...prev,
 				[deviceId]: true,
@@ -85,6 +88,7 @@ const DeviceList = () => {
 					if (data.status === "complete" || data.status === "error") {
 						eventSource.close()
 						addBackupLog(data.data)
+						setIsGenerating(false)
 
 						if (data.status === "complete" && data.data) {
 							console.log("Backup completed with data:", data.data)
@@ -100,6 +104,7 @@ const DeviceList = () => {
 				console.error("EventSource failed:", error)
 				addLog("Connection error occurred", "error", deviceId)
 				eventSource.close()
+				setIsGenerating(false)
 				setActiveBackups(prev => ({
 					...prev,
 					[deviceId]: false,
@@ -145,10 +150,19 @@ const DeviceList = () => {
 				throw new Error(`HTTP error! status: ${response.status}`)
 			}
 			const data = await response.json()
-			setScriptStatuses(prev => ({
-				...prev,
-				[deviceId]: data.status || "Unknown",
-			}))
+
+			let message,
+				status = ""
+			if (data.status) {
+				message = "Script has been running since "
+				status = "complete"
+			} else {
+				message = "Script has been inactive since "
+				status = "error"
+			}
+			message += dateFormat(data.dateChanged, "mmm dd, yyyy HH:MM")
+
+			addLog(message, status)
 		} catch (error) {
 			setScriptStatuses(prev => ({
 				...prev,
@@ -157,73 +171,10 @@ const DeviceList = () => {
 		}
 	}
 
-	const handleLogin = async () => {
-		const loginData = {
-			Username: "admin",
-			Password: "password123",
-		}
-
-		try {
-			const response = await fetch("http://localhost:5299/api/auth/login", {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify(loginData),
-			})
-
-			if (!response.ok) {
-				throw new Error("Login failed")
-			}
-
-			const data = await response.json()
-
-			if (!data.token) {
-				throw new Error("Token not found in response")
-			}
-
-			// Assuming setAuthToken saves the token securely (e.g., local storage or state)
-			storeAuthToken(data.token)
-
-			alert("Login successful!")
-		} catch (error) {
-			console.error("Login failed:", error.message)
-			alert("Login failed: " + error.message)
-		}
-	}
-
-	const storeAuthToken = (token, useSessionStorage = false) => {
-		try {
-			if (!token) {
-				throw new Error("Invalid token")
-			}
-
-			// Decide storage method: sessionStorage or localStorage
-			const storage = useSessionStorage ? sessionStorage : localStorage
-			setAuthToken(token)
-
-			// Save the token
-			storage.setItem("authToken", token)
-			console.log("Token saved successfully.")
-		} catch (error) {
-			console.error("Error saving token:", error.message)
-		}
-	}
-
 	const backupLogRef = useRef(null)
 
 	return (
 		<div className="w-full mx-auto p-6 space-y-4">
-			<h1 className="text-2xl font-bold mb-6">Device Backup Dashboard</h1>
-
-			{/* Login Button */}
-			<button
-				onClick={handleLogin}
-				className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 transition-colors"
-			>
-				Log in
-			</button>
-
 			<div className="space-y-4">
 				{devices.map(device => (
 					<div key={device.id} className="border rounded-lg shadow-sm">
@@ -246,7 +197,7 @@ const DeviceList = () => {
 										disabled={activeBackups[device.id]}
 									>
 										<span>
-											{activeBackups[device.id]
+											{isGenerating
 												? "Backup in Progress"
 												: "Generate Backup"}
 										</span>
@@ -272,7 +223,7 @@ const DeviceList = () => {
 								<h4 className="font-medium mb-2">Backup Events</h4>
 								<div
 									ref={backupLogRef}
-									className="space-y-2 max-h-52 overflow-y-scroll"
+									className="space-y-2 max-h-52 overflow-y-scroll px-2"
 								>
 									{logs.map((log, index) =>
 										log.isBackup ? (
@@ -282,16 +233,6 @@ const DeviceList = () => {
 										)
 									)}
 								</div>
-							</div>
-						)}
-
-						{/* Display Script Status */}
-						{scriptStatuses[device.id] && (
-							<div className="p-4 bg-gray-100 mt-2">
-								<h4 className="font-medium">Script Status</h4>
-								<p className="text-sm text-gray-600">
-									{scriptStatuses[device.id]}
-								</p>
 							</div>
 						)}
 					</div>

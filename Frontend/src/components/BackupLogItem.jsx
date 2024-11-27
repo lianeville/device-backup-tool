@@ -1,47 +1,20 @@
 import React from "react"
 import { Clock, AlertTriangle, Server } from "lucide-react"
 import PropTypes from "prop-types"
+import dateFormat from "dateformat"
 
 const BackupLogItem = ({ log }) => {
-	// Convert timestamp to readable date
-
-	console.log(log)
-	const formatDate = isoString => {
-		return new Date(isoString).toLocaleString("en-US", {
-			year: "numeric",
-			month: "long",
-			day: "numeric",
-			hour: "2-digit",
-			minute: "2-digit",
-			second: "2-digit",
-			timeZoneName: "short",
-		})
-	}
-
-	// Convert millisecond timestamp to readable datetime
-	const formatAlertTime = milliseconds => {
-		return new Date(parseInt(milliseconds)).toLocaleString("en-US", {
-			month: "short",
-			day: "numeric",
-			hour: "2-digit",
-			minute: "2-digit",
-			second: "2-digit",
-		})
-	}
+	log.Alerts.forEach((alert, i) => {
+		const time = alert.time * 1000
+		log.Alerts[i].time = dateFormat(time, "mmm dd, yyyy HH:MM")
+	})
 
 	return (
 		<div className="pt-2">
-			{/* <div className="flex items-center mb-3">
-				<Server className="mr-2 text-blue-500" size={20} />
-				<h2 className="text-lg font-semibold text-gray-800">
-					Backup Log: {log.Hostname}
-				</h2>
-			</div> */}
-
 			<div className="flex items-center">
 				<Clock className="mr-2 text-gray-500" size={16} />
 				<p className="text-sm text-gray-600">
-					Backup Retrieved: {formatDate(log.date)}
+					Backup Retrieved: {log.date}
 				</p>
 			</div>
 
@@ -55,12 +28,13 @@ const BackupLogItem = ({ log }) => {
 						{log.Alerts.map((alert, index) => (
 							<li
 								key={`${alert.key}-${index}`}
-								className="text-sm text-gray-600 flex items-center"
+								className="text-sm text-gray-600 flex items-center w-full"
 							>
 								<span className="mr-2 text-xs text-yellow-600">•</span>
 								{alert.key.replace(/_/g, " ")}
-								<span className="ml-2 text-xs text-gray-500">
-									@ {formatAlertTime(alert.time)}
+								<div className="mx-2 flex-grow border-t border-gray-200 h-px"></div>
+								<span className="text-xs text-gray-400">
+									@ {alert.time}
 								</span>
 							</li>
 						))}
