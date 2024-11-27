@@ -31,7 +31,6 @@ const DeviceList = () => {
 		log.date = dateFormat("mmm dd, yyyy HH:MM")
 		log.isBackup = true
 
-		console.log(log)
 		setLogs(prev => [...prev, log])
 	}
 
@@ -135,7 +134,7 @@ const DeviceList = () => {
 	}
 
 	const getScriptStatus = async deviceId => {
-		console.log(authToken)
+		addLog("Getting backup script status...", "progress")
 		try {
 			const response = await fetch(
 				"http://localhost:5299/api/device/script/status",
@@ -154,10 +153,10 @@ const DeviceList = () => {
 			let message,
 				status = ""
 			if (data.status) {
-				message = "Script has been running since "
+				message = "Backup script has been running since "
 				status = "complete"
 			} else {
-				message = "Script has been inactive since "
+				message = "Backup script has been inactive since "
 				status = "error"
 			}
 			message += dateFormat(data.dateChanged, "mmm dd, yyyy HH:MM")
@@ -223,7 +222,7 @@ const DeviceList = () => {
 								<h4 className="font-medium mb-2">Backup Events</h4>
 								<div
 									ref={backupLogRef}
-									className="space-y-2 max-h-52 overflow-y-scroll px-2"
+									className="space-y-2 max-h-[325px] overflow-y-scroll px-2"
 								>
 									{logs.map((log, index) =>
 										log.isBackup ? (
