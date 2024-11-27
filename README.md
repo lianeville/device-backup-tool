@@ -4,7 +4,7 @@
 
 Device Backup Manager is a web application designed to facilitate automated backup management for network devices. The application provides a user-friendly interface for generating backups, monitoring backup processes, and checking script statuses. It maintains persistent SSH connections to network devices and performs SSH commands to execute backup procedures securely.
 
-![Adding Device Demo]("demo/Adding_Device_Example.gif")
+![Adding Device Demo](demo/Adding_Device_Example.gif)
 
 ## Features
 
